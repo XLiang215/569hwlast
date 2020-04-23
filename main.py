@@ -1,128 +1,70 @@
-rom cross_entropy import Cross_Entropy
+from cross_entropy import Cross_Entropy
 from lag import LAG
 from llsr import LLSR as myLLSR
 from pixelhop2 import Pixelhop2
 import numpy as np
 
-from torch.utils.data.sampler import SubsetRandomSampler
+
 from skimage.util import view_as_windows
 import skimage.measure
 
-import torch #for loading dataset
-import torchvision 
-import torchvision.transforms as transforms
+from tensorflow.keras import datasets, layers, models
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import Normalizer
 
-import timef
+import time
 
-def load_train_data(fit_num=10000, trans_num=50000):
+def load_train_data(fit_num=10000):
     print("start to load train data")
-    #load the data using Pytorch lib
-    transform = transforms.Compose(
-    [transforms.ToTensor(), transforms.Normalize((0.5,0.5,0.5), (0.5,0.5,0.5))])
+    #load the data using tensorflow lib
+    (train_images, train_labels), (_, _) = datasets.cifar10.load_data()
 
-    train = torchvision.datasets.CIFAR10(root='./data', train=True,
-                                            download=True, transform=transform)
-    load_train = torch.utils.data.DataLoader(train, batch_size=1,
-                                              shuffle=True, num_workers=2)
+    # Normalize pixel values to be between 0 and 1
+    train_images = train_images / 255.0
     
     #generate train indices for each class for subset extraction
     labels_list = [[] for _ in range(10)]
     count = 0
-    images_50k = []
-    labels_50k = []
     
     print("extracting 10 classes in 50k datas...")
-    for images, labels in load_train:
-        images_50k.append(images.numpy())
-        labels_50k.append(labels.numpy())
+    for image, label in zip(train_images, train_labels):
         if (count % 10000 == 9999):
             print('{} / 50000'.format(count+1))
-        category = np.asscalar(labels.numpy())
+        category = np.asscalar(label)
         labels_list[category].append(count)
         count += 1
-        if count > 30000:
+        if count > 20000:
             break;
     print("extract finish")
 
     print("making fit datas...")
     train_indices = []
     [train_indices.extend(labels_list[i][0:int(fit_num/10)]) for i in range(10)]
-    load_train_pixelhop2 = torch.utils.data.DataLoader(train, batch_size=1, sampler=SubsetRandomSampler(train_indices))
-    images_fit = []
-    for data in load_train_pixelhop2:
-        images, labels = data
-        images_fit.append(images.numpy())
-    images_10karray = np.asarray(images_fit)
-    X1 = images_10karray.reshape(fit_num, 3, 32, 32)
-    X1 = np.moveaxis(X1, 1, -1)
-    X1 = (X1+1)/2 #normalize
+    images_fit = train_images[train_indices,:]
+    X1 = np.asarray(images_fit)
     print("successfully made fit dataset of size {}".format(X1.shape[0]))
 
     print("making transform datas...")
-    
-    if trans_num == 50000:
-        X2 = np.asarray(images_50k).reshape(50000, 3, 32, 32)
-        X2 = np.moveaxis(X2, 1, -1)
-        X2 = (X2+1)/2 #normalize
-        Y2 = np.asarray(labels_50k).ravel()
-    else:
-        train_indices = []
-        [train_indices.extend(labels_list[i][0:int(trans_num/10)]) for i in range(10)]
-        load_train_pixelhop2 = torch.utils.data.DataLoader(train, batch_size=1, sampler=SubsetRandomSampler(train_indices))
-        images_trans = []
-        labels_trans = []
-        for data in load_train_pixelhop2:
-            images, labels = data
-            images_trans.append(images.numpy())
-            labels_trans.append(labels.numpy())
-        X2 = np.asarray(images_trans).reshape(trans_num, 3, 32, 32)
-        X2 = np.moveaxis(X2, 1, -1)
-        X2 = (X2+1)/2 #normalize
-        Y2 = np.asarray(labels_trans).ravel()
+    X2 = train_images
+    Y2 = train_labels.ravel()
     assert X2.shape[0] == Y2.shape[0], "The sizes of train data and label do not match!"
     print("successfully made fit dataset of size {}".format(X2.shape[0]))
     return X1, X2, Y2
 
 def load_test_data(test_num=10000):
     print("start to load test data")
-    #load the data using Pytorch lib
-    transform = transforms.Compose(
-    [transforms.ToTensor(), transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
+    #load the data using tensorflow lib
+    (_, _), (test_images, test_labels) = datasets.cifar10.load_data()
 
-    test = torchvision.datasets.CIFAR10(root='./data', train=False,
-                                           download=True, transform=transform)
-    load_test = torch.utils.data.DataLoader(test, batch_size=1,
-                                             shuffle=True, num_workers=2)
-    
-    images_test = []
-    labels_test = []
-    for images, labels in load_test:
-        images_test.append(images.numpy())
-        labels_test.append(labels.numpy())
-    X_test = np.asarray(images_test)[0: test_num].reshape(test_num,3, 32, 32)
-    X_test = np.moveaxis(X_test, 1, -1)
-    X_test = Normalizer().fit(X_test).transformer.transform(X_test)
-    Y_test = np.asarray(labels_test)[0: test_num].ravel()
+    # Normalize pixel values to be between 0 and 1
+    test_images = test_images / 255.0
+    X_test = test_images[0: test_num]
+    Y_test = test_labels[0: test_num].ravel()
     assert X_test.shape[0] == Y_test.shape[0], "The sizes of test data and label do not match!"
     print("successfully made test dataset of size {}".format(X_test.shape[0]))
     
     return X_test, Y_test
-
-    def Shrink(X, shrinkArg):
-        if int(X[0,:,0,0].shape[0]) <= 28:
-            X = skimage.measure.block_reduce(X, (1,2,2,1), np.max)
-        win = shrinkArg['win']
-        stride = shrinkArg['stride']
-        ch = X.shape[-1]
-        X = view_as_windows(X, (1,win,win,ch), (1,stride,stride,ch))
-        return X.reshape(X.shape[0], X.shape[1], X.shape[2], -1)
-
-    # example callback function for how to concate features from different hops
-def Concat(X, concatArg):
-    return X
 
 
 # feature selection
@@ -189,6 +131,18 @@ def LAG_test_unit(lag_list, x_1, x_2, x_3):
     return the_list
 
 ######################################### Preparation ##########################################
+def Shrink(X, shrinkArg):
+        if int(X.shape[1]) < 32:
+            X = skimage.measure.block_reduce(X, (1,2,2,1), np.max)
+        win = shrinkArg['win']
+        stride = shrinkArg['stride']
+        ch = X.shape[-1]
+        X = view_as_windows(X, (1,win,win,ch), (1,stride,stride,ch))
+        return X.reshape(X.shape[0], X.shape[1], X.shape[2], -1)
+
+def Concat(X, concatArg):
+    return X
+
 # set args
 SaabArgs = [{'num_AC_kernels':-1, 'needBias':False, 'useDC':True, 'batch':None, 'cw': False}, 
             {'num_AC_kernels':-1, 'needBias':True, 'useDC':True, 'batch':None, 'cw': True},
@@ -199,12 +153,10 @@ shrinkArgs = [{'func':Shrink, 'win':5, 'stride': 1},
 concatArg = {'func':Concat}
 
 # Load train data
-X1, X2, Y2 = load_train_data(10000, 10000) #(fit data size, transform data size), default(10000, 50000)
+X1, X2, Y2 = load_train_data(fit_num=10000) #(fit data size, transform data size), default(10000, 50000)
 
 # new model
 p2 = Pixelhop2(depth=3, TH1=0.001, TH2=0.001, SaabArgs=SaabArgs, shrinkArgs=shrinkArgs, concatArg=concatArg)
-
-
 
 ########################################### Module 1 ###########################################
 print("Module 1 start")
@@ -214,9 +166,20 @@ start = time.time()
 print("Do fit on data of size {}".format(X1.shape))
 p2.fit(X1)
 
-# Get features (transform
+# Get features (transform)
 print("Do transform on data of size {}".format(X2.shape))
-output = p2.transform(X2)
+
+# use batches
+for i in range(50):
+    print("do transform {} to {}".format(i*1000, (i+1)*1000-1))
+    Xtemp = X2[i*1000: (i+1)*1000]
+    if i == 0:
+        output = p2.transform(Xtemp)
+        print(output[0].shape)
+    else:
+        output_temp = p2.transform(Xtemp)
+        for i in range(3):
+            output[i] = np.append(output[i],output_temp[i],axis=0)
 end = time.time()
 print("Module 1 time {} s".format(end-start))
 
@@ -264,13 +227,23 @@ print("The traiing err is {}".format(train_err))
 end = time.time()
 print("Module 3 time {} s".format(end-start))
 
+
 ########################################### Testing ###########################################
 # Load test data
-X_test, Y_test = load_test_data(test_num=10000) #test data size, default 100000
+X_test, Y_test = load_test_data(test_num=10000) #test data size, default 10000
 
 # Get features (transform)
 print("Do transform on data of size {}".format(X_test.shape))
-output = p2.transform(X_test)
+for i in range(10):
+    print("do transform {} to {}".format(i*1000, (i+1)*1000-1))
+    Xtemp = X_test[i*1000: (i+1)*1000]
+    if i == 0:
+        output = p2.transform(Xtemp)
+        print(output[0].shape)
+    else:
+        output_temp = p2.transform(Xtemp)
+        for i in range(3):
+            output[i] = np.append(output[i],output_temp[i],axis=0)
 
 # Max-pooling
 print("do max-pooling")
@@ -297,11 +270,3 @@ print("test on test data")
 Y_pred = clf.predict(feat_final)
 test_err = np.count_nonzero(Y_test-Y_pred) / Y_test.shape[0]
 print("The testing err is {}".format(test_err))
-
-
-
-
-
-
-
-
